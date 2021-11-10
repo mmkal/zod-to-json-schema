@@ -36,5 +36,6 @@ export function parseLiteralDef(
   return {
     type: parsedType === "bigint" ? "integer" : parsedType,
     const: def.value,
+    default: def.value,
   };
 }
