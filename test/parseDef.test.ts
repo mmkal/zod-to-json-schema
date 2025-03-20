@@ -1,11 +1,14 @@
 import { JSONSchema7Type } from "json-schema";
 import { z } from "zod";
-import { parseDef } from "../src/parseDef";
+import { parseDef } from "../src/parseDef.js";
 import Ajv from "ajv";
-import { References } from "../src/References";
+import { getRefs } from "../src/Refs.js";
 const ajv = new Ajv();
-describe("Basic parsing", () => {
-  it("should return a proper json schema with some common types without validation", () => {
+
+import { suite } from "./suite.js";
+
+suite("Basic parsing", (test) => {
+  test("should return a proper json schema with some common types without validation", (assert) => {
     const zodSchema = z.object({
       requiredString: z.string(),
       optionalString: z.string().optional(),
@@ -151,8 +154,75 @@ describe("Basic parsing", () => {
       ],
       additionalProperties: false,
     };
-    const parsedSchema = parseDef(zodSchema._def, new References());
-    expect(parsedSchema).toStrictEqual(expectedJsonSchema);
-    expect(ajv.validateSchema(parsedSchema!)).toEqual(true);
+    const parsedSchema = parseDef(zodSchema._def, getRefs());
+    assert(parsedSchema, expectedJsonSchema);
+    assert(ajv.validateSchema(parsedSchema!), true);
+  });
+
+  test("should handle a nullable string properly", (assert) => {
+    const shorthand = z.string().nullable();
+    const union = z.union([z.string(), z.null()]);
+
+    const expected = { type: ["string", "null"] };
+
+    assert(parseDef(shorthand._def, getRefs()), expected);
+    assert(parseDef(union._def, getRefs()), expected);
+  });
+
+  test("should be possible to use branded string", (assert) => {
+    const schema = z.string().brand<"x">();
+    const parsedSchema = parseDef(schema._def, getRefs());
+
+    const expectedSchema = {
+      type: "string",
+    };
+    assert(parsedSchema, expectedSchema);
+  });
+
+  test("should be possible to use readonly", (assert) => {
+    const parsedSchema = parseDef(z.object({}).readonly()._def, getRefs());
+    const jsonSchema: JSONSchema7Type = {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    };
+    assert(parsedSchema, jsonSchema);
+  });
+
+  test("should be possible to use catch", (assert) => {
+    const parsedSchema = parseDef(z.number().catch(5)._def, getRefs());
+    const jsonSchema: JSONSchema7Type = {
+      type: "number",
+    };
+    assert(parsedSchema, jsonSchema);
+  });
+
+  test("should be possible to use pipeline", (assert) => {
+    const schema = z.number().pipe(z.number().int());
+
+    assert(parseDef(schema._def, getRefs()), {
+      allOf: [{ type: "number" }, { type: "integer" }],
+    });
+  });
+
+  test("should get undefined for function", (assert) => {
+    const parsedSchema = parseDef(z.function()._def, getRefs());
+    const jsonSchema = undefined;
+    assert(parsedSchema, jsonSchema);
+  });
+
+  test("should get undefined for void", (assert) => {
+    const parsedSchema = parseDef(z.void()._def, getRefs());
+    const jsonSchema = undefined;
+    assert(parsedSchema, jsonSchema);
+  });
+
+  test("nested lazy", (assert) => {
+    const zodSchema = z.lazy(() => z.lazy(() => z.string()));
+    const expected = {
+      type: "string",
+    };
+    const parsed = parseDef(zodSchema._def, getRefs());
+    assert(parsed, expected);
   });
 });

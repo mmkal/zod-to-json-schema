@@ -1,8 +1,9 @@
 import { ZodNullableDef } from "zod";
-import { JsonSchema7Type, parseDef } from "../parseDef";
-import { References } from "../References";
-import { JsonSchema7NullType } from "./null";
-import { primitiveMappings } from "./union";
+import { parseDef } from "../parseDef.js";
+import { JsonSchema7Type } from "../parseTypes.js";
+import { Refs } from "../Refs.js";
+import { JsonSchema7NullType } from "./null.js";
+import { primitiveMappings } from "./union.js";
 
 export type JsonSchema7NullableType =
   | {
@@ -14,11 +15,11 @@ export type JsonSchema7NullableType =
 
 export function parseNullableDef(
   def: ZodNullableDef,
-  refs: References
+  refs: Refs,
 ): JsonSchema7NullableType | undefined {
   if (
     ["ZodString", "ZodNumber", "ZodBigInt", "ZodBoolean", "ZodNull"].includes(
-      def.innerType._def.typeName
+      def.innerType._def.typeName,
     ) &&
     (!def.innerType._def.checks || !def.innerType._def.checks.length)
   ) {
@@ -41,18 +42,21 @@ export function parseNullableDef(
     };
   }
 
-  const type = parseDef(def.innerType._def, refs.addToPath("anyOf", "0"));
+  if (refs.target === "openApi3") {
+    const base = parseDef(def.innerType._def, {
+      ...refs,
+      currentPath: [...refs.currentPath],
+    });
 
-  return type
-    ? refs.target === "openApi3"
-      ? ({ ...type, nullable: true } as any)
-      : {
-          anyOf: [
-            type,
-            {
-              type: "null",
-            },
-          ],
-        }
-    : undefined;
+    if (base && "$ref" in base) return { allOf: [base], nullable: true } as any;
+
+    return base && ({ ...base, nullable: true } as any);
+  }
+
+  const base = parseDef(def.innerType._def, {
+    ...refs,
+    currentPath: [...refs.currentPath, "anyOf", "0"],
+  });
+
+  return base && { anyOf: [base, { type: "null" }] };
 }

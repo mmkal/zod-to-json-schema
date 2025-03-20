@@ -1,5 +1,10 @@
 import { ZodNumberDef } from "zod";
-import { References } from "../References";
+import {
+  addErrorMessage,
+  ErrorMessages,
+  setResponseValueAndErrors,
+} from "../errorMessages.js";
+import { Refs } from "../Refs.js";
 
 export type JsonSchema7NumberType = {
   type: "number" | "integer";
@@ -8,56 +13,99 @@ export type JsonSchema7NumberType = {
   maximum?: number;
   exclusiveMaximum?: number;
   multipleOf?: number;
+  errorMessage?: ErrorMessages<JsonSchema7NumberType>;
 };
 
 export function parseNumberDef(
   def: ZodNumberDef,
-  refs: References
+  refs: Refs,
 ): JsonSchema7NumberType {
   const res: JsonSchema7NumberType = {
     type: "number",
   };
 
-  if (def.checks) {
-    for (const check of def.checks) {
-      switch (check.kind) {
-        case "int":
-          res.type = "integer";
-          break;
-        case "min":
-          if (refs.target === "jsonSchema7") {
-            if (check.inclusive) {
-              res.minimum = check.value;
-            } else {
-              res.exclusiveMinimum = check.value;
-            }
+  if (!def.checks) return res;
+
+  for (const check of def.checks) {
+    switch (check.kind) {
+      case "int":
+        res.type = "integer";
+        addErrorMessage(res, "type", check.message, refs);
+        break;
+      case "min":
+        if (refs.target === "jsonSchema7") {
+          if (check.inclusive) {
+            setResponseValueAndErrors(
+              res,
+              "minimum",
+              check.value,
+              check.message,
+              refs,
+            );
           } else {
-            if (!check.inclusive) {
-              res.exclusiveMinimum = true as any;
-            }
-            res.minimum = check.value;
+            setResponseValueAndErrors(
+              res,
+              "exclusiveMinimum",
+              check.value,
+              check.message,
+              refs,
+            );
           }
-          break;
-        case "max":
-          if (refs.target === "jsonSchema7") {
-            if (check.inclusive) {
-              res.maximum = check.value;
-            } else {
-              res.exclusiveMaximum = check.value;
-            }
+        } else {
+          if (!check.inclusive) {
+            res.exclusiveMinimum = true as any;
+          }
+          setResponseValueAndErrors(
+            res,
+            "minimum",
+            check.value,
+            check.message,
+            refs,
+          );
+        }
+        break;
+      case "max":
+        if (refs.target === "jsonSchema7") {
+          if (check.inclusive) {
+            setResponseValueAndErrors(
+              res,
+              "maximum",
+              check.value,
+              check.message,
+              refs,
+            );
           } else {
-            if (!check.inclusive) {
-              res.exclusiveMaximum = true as any;
-            }
-            res.maximum = check.value;
+            setResponseValueAndErrors(
+              res,
+              "exclusiveMaximum",
+              check.value,
+              check.message,
+              refs,
+            );
           }
-          break;
-        case "multipleOf":
-          res.multipleOf = check.value;
-          break;
-      }
+        } else {
+          if (!check.inclusive) {
+            res.exclusiveMaximum = true as any;
+          }
+          setResponseValueAndErrors(
+            res,
+            "maximum",
+            check.value,
+            check.message,
+            refs,
+          );
+        }
+        break;
+      case "multipleOf":
+        setResponseValueAndErrors(
+          res,
+          "multipleOf",
+          check.value,
+          check.message,
+          refs,
+        );
+        break;
     }
   }
-
   return res;
 }

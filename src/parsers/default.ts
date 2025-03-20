@@ -1,10 +1,11 @@
 import { ZodDefaultDef } from "zod";
-import { JsonSchema7Type, parseDef } from "../parseDef";
-import { References } from "../References";
+import { parseDef } from "../parseDef.js";
+import { JsonSchema7Type } from "../parseTypes.js";
+import { Refs } from "../Refs.js";
 
 export function parseDefaultDef(
   _def: ZodDefaultDef,
-  refs: References
+  refs: Refs,
 ): JsonSchema7Type & { default: any } {
   return {
     ...parseDef(_def.innerType._def, refs),

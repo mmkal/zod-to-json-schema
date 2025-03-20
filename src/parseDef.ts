@@ -1,86 +1,69 @@
-import { ZodFirstPartyTypeKind, ZodTypeDef } from "zod";
-import { JsonSchema7AnyType, parseAnyDef } from "./parsers/any";
-import { JsonSchema7ArrayType, parseArrayDef } from "./parsers/array";
-import { JsonSchema7BigintType, parseBigintDef } from "./parsers/bigint";
-import { JsonSchema7BooleanType, parseBooleanDef } from "./parsers/boolean";
-import { JsonSchema7DateType, parseDateDef } from "./parsers/date";
-import { parseDefaultDef } from "./parsers/default";
-import { parseEffectsDef } from "./parsers/effects";
-import { JsonSchema7EnumType, parseEnumDef } from "./parsers/enum";
-import {
-  JsonSchema7AllOfType,
-  parseIntersectionDef,
-} from "./parsers/intersection";
-import { JsonSchema7LiteralType, parseLiteralDef } from "./parsers/literal";
-import { JsonSchema7MapType, parseMapDef } from "./parsers/map";
-import {
-  JsonSchema7NativeEnumType,
-  parseNativeEnumDef,
-} from "./parsers/nativeEnum";
-import { JsonSchema7NeverType, parseNeverDef } from "./parsers/never";
-import { JsonSchema7NullType, parseNullDef } from "./parsers/null";
-import { JsonSchema7NullableType, parseNullableDef } from "./parsers/nullable";
-import { JsonSchema7NumberType, parseNumberDef } from "./parsers/number";
-import { JsonSchema7ObjectType, parseObjectDef } from "./parsers/object";
-import { parsePromiseDef } from "./parsers/promise";
-import { JsonSchema7RecordType, parseRecordDef } from "./parsers/record";
-import { JsonSchema7SetType, parseSetDef } from "./parsers/set";
-import { JsonSchema7StringType, parseStringDef } from "./parsers/string";
-import { JsonSchema7TupleType, parseTupleDef } from "./parsers/tuple";
-import {
-  JsonSchema7UndefinedType,
-  parseUndefinedDef,
-} from "./parsers/undefined";
-import { JsonSchema7UnionType, parseUnionDef } from "./parsers/union";
-import { JsonSchema7UnknownType, parseUnknownDef } from "./parsers/unknown";
-import { Item, References } from "./References";
-
-type JsonSchema7RefType = { $ref: string };
-
-export type JsonSchema7Type = (
-  | JsonSchema7StringType
-  | JsonSchema7ArrayType
-  | JsonSchema7NumberType
-  | JsonSchema7BigintType
-  | JsonSchema7BooleanType
-  | JsonSchema7DateType
-  | JsonSchema7EnumType
-  | JsonSchema7LiteralType
-  | JsonSchema7NativeEnumType
-  | JsonSchema7NullType
-  | JsonSchema7NumberType
-  | JsonSchema7ObjectType
-  | JsonSchema7RecordType
-  | JsonSchema7TupleType
-  | JsonSchema7UnionType
-  | JsonSchema7UndefinedType
-  | JsonSchema7RefType
-  | JsonSchema7NeverType
-  | JsonSchema7MapType
-  | JsonSchema7AnyType
-  | JsonSchema7NullableType
-  | JsonSchema7AllOfType
-  | JsonSchema7UnknownType
-  | JsonSchema7SetType
-) & { default?: any; description?: string };
+import { ZodTypeDef } from "zod";
+import { Refs, Seen } from "./Refs.js";
+import { ignoreOverride } from "./Options.js";
+import { JsonSchema7Type } from "./parseTypes.js";
+import { selectParser } from "./selectParser.js";
 
 export function parseDef(
   def: ZodTypeDef,
-  refs: References
+  refs: Refs,
+  forceResolution = false, // Forces a new schema to be instantiated even though its def has been seen. Used for improving refs in definitions. See https://github.com/StefanTerdell/zod-to-json-schema/pull/61.
 ): JsonSchema7Type | undefined {
-  const item = refs.items.find((x) => Object.is(x.def, def));
-  if (item) return select$refStrategy(item, refs);
-  const newItem: Item = { def, path: refs.currentPath, jsonSchema: undefined };
-  refs.items.push(newItem);
-  const jsonSchema = selectParser(def, (def as any).typeName, refs);
-  if (jsonSchema) addMeta(def, jsonSchema);
+  const seenItem = refs.seen.get(def);
+
+  if (refs.override) {
+    const overrideResult = refs.override?.(
+      def,
+      refs,
+      seenItem,
+      forceResolution,
+    );
+
+    if (overrideResult !== ignoreOverride) {
+      return overrideResult;
+    }
+  }
+
+  if (seenItem && !forceResolution) {
+    const seenSchema = get$ref(seenItem, refs);
+
+    if (seenSchema !== undefined) {
+      return seenSchema;
+    }
+  }
+
+  const newItem: Seen = { def, path: refs.currentPath, jsonSchema: undefined };
+
+  refs.seen.set(def, newItem);
+
+  const jsonSchemaOrGetter = selectParser(def, (def as any).typeName, refs);
+
+  // If the return was a function, then the inner definition needs to be extracted before a call to parseDef (recursive)
+  const jsonSchema =
+    typeof jsonSchemaOrGetter === "function"
+      ? parseDef(jsonSchemaOrGetter(), refs)
+      : jsonSchemaOrGetter;
+
+  if (jsonSchema) {
+    addMeta(def, refs, jsonSchema);
+  }
+
+  if (refs.postProcess) {
+    const postProcessResult = refs.postProcess(jsonSchema, def, refs);
+
+    newItem.jsonSchema = jsonSchema;
+
+    return postProcessResult;
+  }
+
   newItem.jsonSchema = jsonSchema;
+
   return jsonSchema;
 }
 
-const select$refStrategy = (
-  item: Item,
-  refs: References
+const get$ref = (
+  item: Seen,
+  refs: Refs,
 ):
   | {
       $ref: string;
@@ -89,35 +72,30 @@ const select$refStrategy = (
   | undefined => {
   switch (refs.$refStrategy) {
     case "root":
-      return {
-        $ref:
-          item.path.length === 0
-            ? ""
-            : item.path.length === 1
-            ? `${item.path[0]}/`
-            : item.path.join("/"),
-      };
+      return { $ref: item.path.join("/") };
     case "relative":
-      return { $ref: makeRelativePath(refs.currentPath, item.path) };
-    case "none": {
+      return { $ref: getRelativePath(refs.currentPath, item.path) };
+    case "none":
+    case "seen": {
       if (
         item.path.length < refs.currentPath.length &&
         item.path.every((value, index) => refs.currentPath[index] === value)
       ) {
         console.warn(
           `Recursive reference detected at ${refs.currentPath.join(
-            "/"
-          )}! Defaulting to any`
+            "/",
+          )}! Defaulting to any`,
         );
+
         return {};
-      } else {
-        return item.jsonSchema;
       }
+
+      return refs.$refStrategy === "seen" ? {} : undefined;
     }
   }
 };
 
-const makeRelativePath = (pathA: string[], pathB: string[]) => {
+const getRelativePath = (pathA: string[], pathB: string[]) => {
   let i = 0;
   for (; i < pathA.length && i < pathB.length; i++) {
     if (pathA[i] !== pathB[i]) break;
@@ -125,78 +103,17 @@ const makeRelativePath = (pathA: string[], pathB: string[]) => {
   return [(pathA.length - i).toString(), ...pathB.slice(i)].join("/");
 };
 
-const selectParser = (
-  def: any,
-  typeName: ZodFirstPartyTypeKind,
-  refs: References
-): JsonSchema7Type | undefined => {
-  switch (typeName) {
-    case ZodFirstPartyTypeKind.ZodString:
-      return parseStringDef(def);
-    case ZodFirstPartyTypeKind.ZodNumber:
-      return parseNumberDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodObject:
-      return parseObjectDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodBigInt:
-      return parseBigintDef();
-    case ZodFirstPartyTypeKind.ZodBoolean:
-      return parseBooleanDef();
-    case ZodFirstPartyTypeKind.ZodDate:
-      return parseDateDef();
-    case ZodFirstPartyTypeKind.ZodUndefined:
-      return parseUndefinedDef();
-    case ZodFirstPartyTypeKind.ZodNull:
-      return parseNullDef(refs);
-    case ZodFirstPartyTypeKind.ZodArray:
-      return parseArrayDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodUnion:
-      return parseUnionDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodIntersection:
-      return parseIntersectionDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodTuple:
-      return parseTupleDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodRecord:
-      return parseRecordDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodLiteral:
-      return parseLiteralDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodEnum:
-      return parseEnumDef(def);
-    case ZodFirstPartyTypeKind.ZodNativeEnum:
-      return parseNativeEnumDef(def);
-    case ZodFirstPartyTypeKind.ZodNullable:
-      return parseNullableDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodOptional:
-      return parseDef(def.innerType._def, refs);
-    case ZodFirstPartyTypeKind.ZodMap:
-      return parseMapDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodSet:
-      return parseSetDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodLazy:
-      return parseDef(def.getter()._def, refs);
-    case ZodFirstPartyTypeKind.ZodPromise:
-      return parsePromiseDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodNever:
-      return parseNeverDef();
-    case ZodFirstPartyTypeKind.ZodEffects:
-      return parseEffectsDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodAny:
-      return parseAnyDef();
-    case ZodFirstPartyTypeKind.ZodUnknown:
-      return parseUnknownDef();
-    case ZodFirstPartyTypeKind.ZodDefault:
-      return parseDefaultDef(def, refs);
-    case ZodFirstPartyTypeKind.ZodFunction:
-    case ZodFirstPartyTypeKind.ZodVoid:
-      return undefined;
-    default:
-      return ((_: never) => undefined)(typeName);
-  }
-};
-
 const addMeta = (
   def: ZodTypeDef,
-  jsonSchema: JsonSchema7Type
+  refs: Refs,
+  jsonSchema: JsonSchema7Type,
 ): JsonSchema7Type => {
-  if (def.description) jsonSchema.description = def.description;
+  if (def.description) {
+    jsonSchema.description = def.description;
+
+    if (refs.markdownDescription) {
+      jsonSchema.markdownDescription = def.description;
+    }
+  }
   return jsonSchema;
 };

@@ -1,186 +1,112 @@
 import { ZodSchema } from "zod";
-import { JsonSchema7Type, parseDef } from "./parseDef";
-import { $refStrategy, EffectStrategy, Target, References } from "./References";
+import { Options, Targets } from "./Options.js";
+import { parseDef } from "./parseDef.js";
+import { JsonSchema7Type } from "./parseTypes.js";
+import { getRefs } from "./Refs.js";
 
-const $schema = "http://json-schema.org/draft-07/schema#";
-
-/**
- *
- * @param schema (ZodSchema) The Zod schema to be converted to a JSON schema.
- * @param name (string) The (optional) name of the schema. If provided, schema will be put in definitions/{name}
- */
-function zodToJsonSchema<Name extends string | undefined = undefined>(
+const zodToJsonSchema = <Target extends Targets = "jsonSchema7">(
   schema: ZodSchema<any>,
-  name?: Name
-): Name extends string
-  ? {
-      $schema: "http://json-schema.org/draft-07/schema#";
-      $ref: `#/definitions/${Name}`;
-      definitions: Record<Name, JsonSchema7Type>;
-    }
-  : { $schema: "http://json-schema.org/draft-07/schema#" } & JsonSchema7Type;
+  options?: Partial<Options<Target>> | string,
+): (Target extends "jsonSchema7" ? JsonSchema7Type : object) & {
+  $schema?: string;
+  definitions?: {
+    [key: string]: Target extends "jsonSchema7"
+      ? JsonSchema7Type
+      : Target extends "jsonSchema2019-09"
+        ? JsonSchema7Type
+        : object;
+  };
+} => {
+  const refs = getRefs(options);
 
-/**
- *
- * @param schema (ZodSchema) The Zod schema to be converted to a JSON schema.
- * @param options (Object) The (optional) options object.
- * @param options.name (string) The (optional) name of the schema. If provided, schema will be put in definitions/{name}
- * @param options.$refStrategy ("root" | "relative" | "none") The (optional) reference builder strategy. Default: "root"
- * @param options.basePath (string[]) The (optional) basePath for the root reference builder strategy. Default: [#]
- * @param options.effectStrategy ("input" | "any") The (optional) effect resolver strategy. Default: "input"
- * @param options.definitionPath ("definitions" | "$defs") defaults to definitions.
- * @param options.target ("jsonSchema7" | "openApi3") defaults to "jsonSchema7"
- *
- */
-function zodToJsonSchema<
-  Name extends string | undefined = undefined,
-  Strategy extends "root" | "relative" | "none" | undefined = undefined,
-  BasePath extends string[] | undefined = undefined,
-  DefinitionPath extends "definitions" | "$defs" = "definitions",
-  Target extends "jsonSchema7" | "openApi3" | undefined = undefined
->(
-  schema: ZodSchema<any>,
-  options?: {
-    name?: Name;
-    $refStrategy?: Strategy;
-    basePath?: BasePath;
-    effectStrategy?: EffectStrategy;
-    definitionPath?: DefinitionPath;
-    target?: Target;
-  }
-): Target extends "openApi3"
-  ? Name extends string
-    ? BasePath extends string[]
-      ? {
-          $ref: string;
-        } & Record<DefinitionPath, Record<Name, object>>
-      : Strategy extends "relative"
-      ? {
-          $ref: `0/${DefinitionPath}/${Name}`;
-        } & Record<DefinitionPath, Record<Name, object>>
-      : {
-          $ref: `#/${DefinitionPath}/${Name}`;
-        } & Record<DefinitionPath, Record<Name, object>>
-    : object
-  : Name extends string
-  ? BasePath extends string[]
-    ? {
-        $schema: "http://json-schema.org/draft-07/schema#";
-        $ref: string;
-      } & Record<DefinitionPath, Record<Name, JsonSchema7Type>>
-    : Strategy extends "relative"
-    ? {
-        $schema: "http://json-schema.org/draft-07/schema#";
-        $ref: `0/${DefinitionPath}/${Name}`;
-      } & Record<DefinitionPath, Record<Name, JsonSchema7Type>>
-    : {
-        $schema: "http://json-schema.org/draft-07/schema#";
-        $ref: `#/${DefinitionPath}/${Name}`;
-      } & Record<DefinitionPath, Record<Name, JsonSchema7Type>>
-  : { $schema: "http://json-schema.org/draft-07/schema#" } & JsonSchema7Type;
+  const definitions =
+    typeof options === "object" && options.definitions
+      ? Object.entries(options.definitions).reduce(
+          (acc, [name, schema]) => ({
+            ...acc,
+            [name]:
+              parseDef(
+                schema._def,
+                {
+                  ...refs,
+                  currentPath: [...refs.basePath, refs.definitionPath, name],
+                },
+                true,
+              ) ?? {},
+          }),
+          {},
+        )
+      : undefined;
 
-function zodToJsonSchema(
-  schema: ZodSchema<any>,
-  options?:
-    | {
-        name?: string;
-        $refStrategy?: $refStrategy;
-        basePath?: string[];
-        effectStrategy?: EffectStrategy;
-        definitionPath?: "definitions" | "$defs";
-        target?: Target;
-      }
-    | string
-) {
-  if (typeof options === "object") {
-    return options.name === undefined
-      ? options.target === "openApi3"
-        ? parseDef(
-            schema._def,
-            new References(
-              options.basePath ?? ["#"],
-              [],
-              options.$refStrategy ?? "root",
-              options.effectStrategy,
-              options.target
-            )
-          )
+  const name =
+    typeof options === "string"
+      ? options
+      : options?.nameStrategy === "title"
+        ? undefined
+        : options?.name;
+
+  const main =
+    parseDef(
+      schema._def,
+      name === undefined
+        ? refs
         : {
-            $schema,
-            ...parseDef(
-              schema._def,
-              new References(
-                options.basePath ?? ["#"],
-                [],
-                options.$refStrategy ?? "root",
-                options.effectStrategy,
-                options.target
-              )
-            ),
-          }
-      : options.target === "openApi3"
-      ? {
-          $ref:
-            options.$refStrategy === "relative"
-              ? `0/${options.definitionPath ?? "definitions"}/${options.name}`
-              : `#/${options.definitionPath ?? "definitions"}/${options.name}`,
-          [options.definitionPath ?? "definitions"]: {
-            [options.name]:
-              parseDef(
-                schema._def,
-                new References(
-                  [
-                    ...(options.basePath ?? ["#"]),
-                    options.definitionPath ?? "definitions",
-                    options.name,
-                  ],
-                  [],
-                  options.$refStrategy ?? "root",
-                  options.effectStrategy,
-                  options.target
-                )
-              ) || {},
+            ...refs,
+            currentPath: [...refs.basePath, refs.definitionPath, name],
           },
-        }
+      false,
+    ) ?? {};
+
+  const title =
+    typeof options === "object" &&
+    options.name !== undefined &&
+    options.nameStrategy === "title"
+      ? options.name
+      : undefined;
+
+  if (title !== undefined) {
+    main.title = title;
+  }
+
+  const combined: ReturnType<typeof zodToJsonSchema<Target>> =
+    name === undefined
+      ? definitions
+        ? {
+            ...main,
+            [refs.definitionPath]: definitions,
+          }
+        : main
       : {
-          $schema,
-          $ref:
-            options.$refStrategy === "relative"
-              ? `0/${options.definitionPath ?? "definitions"}/${options.name}`
-              : `#/${options.definitionPath ?? "definitions"}/${options.name}`,
-          [options.definitionPath ?? "definitions"]: {
-            [options.name]:
-              parseDef(
-                schema._def,
-                new References(
-                  [
-                    ...(options.basePath ?? ["#"]),
-                    options.definitionPath ?? "definitions",
-                    options.name,
-                  ],
-                  [],
-                  options.$refStrategy ?? "root",
-                  options.effectStrategy,
-                  options.target
-                )
-              ) || {},
+          $ref: [
+            ...(refs.$refStrategy === "relative" ? [] : refs.basePath),
+            refs.definitionPath,
+            name,
+          ].join("/"),
+          [refs.definitionPath]: {
+            ...definitions,
+            [name]: main,
           },
         };
-  } else if (typeof options === "string") {
-    const name = options;
-    return {
-      $schema,
-      $ref: `#/definitions/${name}`,
-      definitions: {
-        [name]: parseDef(schema._def, new References()) || {},
-      },
-    };
-  } else {
-    return {
-      $schema,
-      ...parseDef(schema._def, new References()),
-    };
+
+  if (refs.target === "jsonSchema7") {
+    combined.$schema = "http://json-schema.org/draft-07/schema#";
+  } else if (refs.target === "jsonSchema2019-09" || refs.target === "openAi") {
+    combined.$schema = "https://json-schema.org/draft/2019-09/schema#";
   }
-}
+
+  if (
+    refs.target === "openAi" &&
+    ("anyOf" in combined ||
+      "oneOf" in combined ||
+      "allOf" in combined ||
+      ("type" in combined && Array.isArray(combined.type)))
+  ) {
+    console.warn(
+      "Warning: OpenAI may not support schemas with unions as roots! Try wrapping it in an object property.",
+    );
+  }
+
+  return combined;
+};
 
 export { zodToJsonSchema };

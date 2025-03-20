@@ -1,25 +1,26 @@
 import { z } from "zod";
-import { parseTupleDef } from "../../src/parsers/tuple";
-import { References } from "../../src/References";
+import { parseTupleDef } from "../../src/parsers/tuple.js";
+import { getRefs } from "../../src/Refs.js";
+import { suite } from "../suite.js";
 
-describe("objects", () => {
-  it("should be possible to describe a simple tuple schema", () => {
+suite("objects", (test) => {
+  test("should be possible to describe a simple tuple schema", (assert) => {
     const schema = z.tuple([z.string(), z.number()]);
 
-    const parsedSchema = parseTupleDef(schema._def, new References());
+    const parsedSchema = parseTupleDef(schema._def, getRefs());
     const expectedSchema = {
       type: "array",
       items: [{ type: "string" }, { type: "number" }],
       minItems: 2,
       maxItems: 2,
     };
-    expect(parsedSchema).toStrictEqual(expectedSchema);
+    assert(parsedSchema, expectedSchema);
   });
 
-  it("should be possible to describe a tuple schema with rest()", () => {
+  test("should be possible to describe a tuple schema with rest()", (assert) => {
     const schema = z.tuple([z.string(), z.number()]).rest(z.boolean());
 
-    const parsedSchema = parseTupleDef(schema._def, new References());
+    const parsedSchema = parseTupleDef(schema._def, getRefs());
     const expectedSchema = {
       type: "array",
       items: [{ type: "string" }, { type: "number" }],
@@ -28,6 +29,6 @@ describe("objects", () => {
         type: "boolean",
       },
     };
-    expect(parsedSchema).toStrictEqual(expectedSchema);
+    assert(parsedSchema, expectedSchema);
   });
 });
